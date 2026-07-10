@@ -1,33 +1,63 @@
-name: Claude Code
+name: Claude PR Review
 
 on:
   issue_comment:
     types: [created]
+
   pull_request_review_comment:
     types: [created]
 
+concurrency:
+  group: claude-review-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
-  claude:
+  claude-review:
+    name: Claude PR Review
+
+    # Run only when:
+    # 1. The comment contains @claude
+    # 2. It is attached to a pull request
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude'))
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request != null &&
+        contains(github.event.comment.body, '@claude')
+      ) ||
+      (
+        github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, '@claude')
+      )
 
     runs-on: ubuntu-latest
 
+    # Prevent broken agent runs from consuming hours.
+    timeout-minutes: 20
+
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
       issues: write
-      id-token: write
       actions: read
+      id-token: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
-      - name: Run Claude Code
+      - name: Run Claude PR review
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # Do not silently hold back findings during the
+          # inline-comment classification stage.
+          classify_inline_comments: false
+
+          # Hard limit to prevent loops and huge API bills.
+          claude_args: |
+            --max-turns 12
+            --system-prompt "You are performing a code review only. Do not modify files, create commits, push branches, or open pull requests. Review the pull request diff for correctness, Linux API misuse, resource leaks, memory safety, undefined behavior, error handling, and missing tests. Report only confirmed issues. Post useful findings to GitHub and always finish with a concise written review summary, even when no issues are found."
